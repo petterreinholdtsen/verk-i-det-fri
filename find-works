@@ -1,0 +1,196 @@
+#!/usr/bin/python
+"""
+Locate works from norwegian writers and artists no longer protected by
+copyright.
+"""
+
+import httplib
+import urllib
+import urllib2
+import json
+#import rdflib
+#from BeautifulSoup import BeautifulSoup as Soup
+import sys
+import lxml.html
+
+# Map from viaf ID to death year
+deathyear = {}
+
+# after last creators death year
+duration = 70 # year
+
+def viaf_of_candidates():
+    """
+    Locate all candiates dead at least 70 years ago, to find works no
+    longer covered by copyright in Norway.
+"""
+
+    thisyear = 2014
+
+    category = "Category:Norwegian_writers"
+
+    deadbefore = thisyear - duration
+    deadafter =  deadbefore - 1
+
+    deadafter  = 1800
+    deadbefore = 1850
+
+    print "Wikipedia members of %s died between %d and %d" % (category, deadafter, deadbefore)
+
+    sparqlquery = """
+PREFIX foaf: <http://xmlns.com/foaf/0.1/>
+PREFIX skos: <http://www.w3.org/2004/02/skos/core#>
+PREFIX dct:  <http://purl.org/dc/terms/>
+PREFIX dbpprop: <http://dbpedia.org/property/>
+PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+PREFIX owl: <http://www.w3.org/2002/07/owl#>
+
+SELECT ?name ?page ?sameas ?YEAR WHERE {
+  ?person a foaf:Person ;
+          foaf:isPrimaryTopicOf ?page ;
+          owl:sameAs ?sameas ;
+          dbpprop:name ?name ;
+          dbo:deathYear ?YEAR ;
+          dct:subject/skos:broader?  <http://dbpedia.org/resource/%s>
+  FILTER (?YEAR < xsd:gYear("%d") && ?YEAR >= xsd:gYear("%d"))
+} ORDER BY ?YEAR
+""" % (category, deadbefore, deadafter)
+
+#    print sparqlquery
+
+    uri = "http://dbpedia.org"
+    url = "http://dbpedia.org/sparql?default-graph-uri=%s&query=%s&format=application%%2Fsparql-results%%2Bjson&CXML_redir_for_subjs=121&CXML_redir_for_hrefs=&timeout=30000&debug=on" % (urllib.quote_plus(uri), urllib.quote_plus(sparqlquery))
+
+    data = loadjsonurl(url)
+    viafs = {}
+    for res in data['results']['bindings']:
+#        print res
+        if -1 != res['sameas']['value'].find('http://viaf.org/viaf/'):
+            viaf = res['sameas']['value']
+            viafs[viaf] = 1
+            deathyear[viaf] = int(res['YEAR']['value'])
+            print viaf, "died", deathyear[viaf]
+#    print data
+    return viafs.keys()
+
+def loadjsonurl(url):
+    response = urllib2.urlopen(url)
+    jsondata = response.read()
+    data = json.loads(jsondata)
+    return data
+
+def work_from_viaf(viaf):
+    """
+Locate all works where the viaf reference is listed as creator or
+contributor, return worldcat OCLC identities URLs.
+"""
+    print "Looking up", viaf
+
+    url= "%s/justlinks.json" % viaf
+    try:
+        data = loadjsonurl(url)
+    except ValueError as e:
+        print "error: unable to load json from '%s'" % (url)
+        return []
+    oclcurls = []
+
+    # Map Library of Congress IDs to worldcat URLs
+    if 'LC' in data:
+        for oclc in data['LC']:
+            if "no" == oclc[0:2]:
+                # Not quite sure how to find works for such IDS
+                oclcurl = "http://id.loc.gov/authorities/names/%s.html" % oclc
+                print "error: Not following %s" %oclcurl
+            else:
+                oclcurl = "http://www.worldcat.org/identities/lccn-%s-%s/" % \
+                    (oclc[0:3], oclc[3:])
+#                print oclcurl
+                oclcurls.append(oclcurl)
+    workurls = []
+    for u in oclcurls:
+        print "  loading", u
+        try:
+            html = urllib2.urlopen(u).read()
+#        print html
+            root = lxml.html.fromstring(html)
+            for div in root.cssselect("oclcnum"):
+                oclcnum = div.text
+                oclcurl = "http://www.worldcat.org/oclc/%s" % oclcnum[3:]
+                workurls.append(oclcurl)
+        except urllib2.HTTPError as e:
+            print "error: unable to fetch %s" % u
+#    print workurls
+    return workurls
+
+def viaf2deathyear(viaf):
+#    print "Looking up %s to death year" % viaf
+    if viaf in deathyear:
+#        print "Returning death year %s" % str(deathyear[viaf])
+        return deathyear[viaf]
+    else: # FIXME look up death year
+        print >> sys.stderr, "error: need to figure out death year of %s" % viaf
+#        rdfurl = "%s/rdf.xml" % viaf
+#        rdf = urllib2.urlopen(rdfurl).read()
+#        g = rdflib.Graph()
+#        d = g.parse(data=rdf)
+#        print d
+#        soup = Soup(rdf)
+#        print soup.findAll('schema:deathDate')
+
+        return None
+
+def work_released(workurl):
+    """
+Calculate the year the work become available for everyone (public domain)
+"""
+    url = "%s.jsonld" % workurl
+#    print "Trying to figure out when %s is released" % url
+    data = loadjsonurl(url)
+    datePublished = None
+    maxyear = None
+    name = None
+    yearpublished = None
+    for field in data['@graph']:
+        if '@type' in field:
+            types = field['@type']
+            if not isinstance(field['@type'], list):
+                types = [field['@type']]
+#            print types
+            for type in types:
+                if 'schema:Book' == type:
+                    if 'datePublished' in field:
+                        yearpublished = field['datePublished']
+                    if 'name' in field:
+                        name = field['name']
+                    if 'creator' in field:
+                        creators = field['creator']
+                        if not isinstance(creators, list):
+                            creators = [creators]
+                        for c in creators:
+#                            print "Checking creator", c
+                            y = viaf2deathyear(c)
+                            if y is None or y > maxyear:
+#                                print "Setting maxyear to", y
+                                maxyear = y
+                    if 'contributor' in field:
+                        contributors = field['contributor']
+                        if not isinstance(contributors, list):
+                            contributors = [contributors]
+                        for c in contributors:
+#                            print "Checking contributors", c
+                            y = viaf2deathyear(c)
+                            if y is None or y > maxyear:
+#                                print "Setting maxyear to", y
+                                maxyear = y
+#        else:
+#            print field
+    return (maxyear, name, yearpublished)
+
+for viaf in viaf_of_candidates():
+    print viaf
+    workurls = work_from_viaf(viaf)
+    for workurl in workurls:
+        (year, title, yearpublished) = work_released(workurl)
+        if year is not None:
+            year = year + duration
+        print " ", year, yearpublished, workurl, title

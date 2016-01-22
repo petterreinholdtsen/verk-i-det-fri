@@ -1,0 +1,5 @@
+#select distinct ?article where {
+#  ?article dct:subject dbc:Norwegian_writers .
+#  MINUS { ?article dct:subject dbc:Norwegian_artists . }
+#} LIMIT 100
+select distinct ?article ?label where { ?article dct:subject dbc:Norwegian_writers; rdfs:label ?label . MINUS { ?article dct:subject dbc:Norwegian_artists . } FILTER langMatches( lang(?label), "EN" ) }

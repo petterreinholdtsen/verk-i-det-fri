@@ -1,0 +1,14 @@
+PREFIX bibleontology: <http://bibleontology.com/resource/>
+PREFIX dbo: <http://dbpedia.org/ontology/>
+PREFIX owl: <http://www.w3.org/2002/07/owl#>
+
+SELECT ?art ?abstract
+WHERE 
+{ 
+  SERVICE <http://bibleontology.com/sparql> {
+     bibleontology:Ezra owl:sameAs ?art .
+  }
+  SERVICE <http://dbpedia.org/sparql?default-graph-uri=http://dbpedia.org> {
+     ?art dbo:abstract ?abstract .
+  }
+}
